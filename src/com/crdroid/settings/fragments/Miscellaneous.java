@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2024 crDroid Android Project
+ * Copyright (C) 2016-2023 crDroid Android Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,19 +19,33 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.Resources;
 import android.os.Bundle;
+import android.view.View;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
 
 import androidx.preference.ListPreference;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Handler;
+import android.util.Log;
+import android.app.Activity;
+import android.app.AlertDialog; 
+
 import androidx.preference.Preference;
 import androidx.preference.PreferenceScreen;
 
+import com.android.internal.util.crdroid.SystemRestartUtils;
 import com.android.internal.logging.nano.MetricsProto;
 import com.android.settings.R;
 import com.android.settings.SettingsPreferenceFragment;
 import com.android.settings.search.BaseSearchIndexProvider;
 import com.android.settingslib.search.SearchIndexable;
+
+import com.crdroid.settings.fragments.misc.KeyboxDataPreference;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.preference.Preference;
 
 import com.crdroid.settings.fragments.misc.SensorBlock;
 
@@ -40,6 +54,15 @@ import java.util.List;
 import lineageos.providers.LineageSettings;
 
 import static org.lineageos.internal.util.DeviceKeysConstants.*;
+
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Iterator;
 
 @SearchIndexable
 public class Miscellaneous extends SettingsPreferenceFragment implements
@@ -51,26 +74,70 @@ public class Miscellaneous extends SettingsPreferenceFragment implements
     private static final String SYS_GAMES_SPOOF = "persist.sys.pixelprops.games";
     private static final String SYS_PHOTOS_SPOOF = "persist.sys.pixelprops.gphotos";
     private static final String SYS_NETFLIX_SPOOF = "persist.sys.pixelprops.netflix";
+
     private static final String KEY_THREE_FINGERS_SWIPE = "three_fingers_swipe";
 
+    private static final String SYS_GAMEPROP_ENABLED = "persist.sys.gameprops.enabled";
+    private static final String KEY_GAME_PROPS_JSON_FILE_PREFERENCE = "game_props_json_file_preference";
+    private static final String KEY_PIF_JSON_FILE_PREFERENCE = "pif_json_file_preference";
+    
+    private static final String KEYBOX_DATA_KEY = "keybox_data_setting";
+    private ActivityResultLauncher<Intent> mKeyboxFilePickerLauncher;
+    private KeyboxDataPreference mKeyboxDataPreference;
+
     private Preference mPocketJudge;
-    private ListPreference mThreeFingersSwipeAction;
+
+    private Preference mPifJsonFilePreference;
+
+    private Preference mGamePropsJsonFilePreference;
+    private Preference mGamePropsSpoof;
+
+    private Handler mHandler;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        mHandler = new Handler();
         addPreferencesFromResource(R.xml.crdroid_settings_misc);
-
+        mGamePropsSpoof = findPreference(SYS_GAMEPROP_ENABLED);
         final PreferenceScreen prefScreen = getPreferenceScreen();
         final Resources res = getResources();
+
+        mPifJsonFilePreference = findPreference(KEY_PIF_JSON_FILE_PREFERENCE);
+        if (mPifJsonFilePreference != null) {
+            mPifJsonFilePreference.setOnPreferenceClickListener(pref -> {
+                openFileSelector(10001);
+                return true;
+            });
+        }
+        mGamePropsJsonFilePreference = findPreference(KEY_GAME_PROPS_JSON_FILE_PREFERENCE);
+        if (mGamePropsJsonFilePreference != null) {
+            mGamePropsJsonFilePreference.setOnPreferenceClickListener(pref -> {
+                openFileSelector(10002);
+                return true;
+            });
+        }
+        mGamePropsSpoof.setOnPreferenceChangeListener(this);
+        
+        mKeyboxFilePickerLauncher = registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(),
+        result -> {
+            if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+            Uri uri = result.getData().getData();
+            Preference pref = findPreference(KEYBOX_DATA_KEY);
+            if (pref instanceof KeyboxDataPreference) {
+                ((KeyboxDataPreference) pref).handleFileSelected(uri);
+            }
+        }
+    }
+    );
 
         mPocketJudge = (Preference) prefScreen.findPreference(POCKET_JUDGE);
         boolean mPocketJudgeSupported = res.getBoolean(
                 com.android.internal.R.bool.config_pocketModeSupported);
         if (!mPocketJudgeSupported)
             prefScreen.removePreference(mPocketJudge);
-
+		
         Action threeFingersSwipeAction = Action.fromSettings(getContentResolver(),
                 LineageSettings.System.KEY_THREE_FINGERS_SWIPE_ACTION,
                 Action.NOTHING);
@@ -98,10 +165,157 @@ public class Miscellaneous extends SettingsPreferenceFragment implements
     }
 
     @Override
+    public void onViewCreated(View view, Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        mKeyboxDataPreference = findPreference(KEYBOX_DATA_KEY);
+        if (mKeyboxDataPreference != null) {
+            mKeyboxDataPreference.setFilePickerLauncher(mKeyboxFilePickerLauncher);
+        }
+    }
+
+    @Override
+    public boolean onPreferenceTreeClick(Preference preference) {
+    if ("show_pif_properties".equals(preference.getKey())) {
+        showPropertiesDialog();
+        return true;
+    }
+    return super.onPreferenceTreeClick(preference); // Default handling
+}
+
+   private void openFileSelector(int requestCode) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("application/json");
+        startActivityForResult(intent, requestCode);
+   }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) {
+                if (requestCode == 10001) {
+                    loadPifJson(uri);
+                } else if (requestCode == 10002) {
+                    loadGameSpoofingJson(uri);
+                }
+            }
+        }
+    }
+
+    private void showPropertiesDialog() {
+        StringBuilder properties = new StringBuilder();
+        try {
+            JSONObject jsonObject = new JSONObject();
+            String[] keys = {
+                "persist.sys.pihooks_ID",
+                "persist.sys.pihooks_BRAND",
+                "persist.sys.pihooks_DEVICE",
+                "persist.sys.pihooks_FINGERPRINT",
+                "persist.sys.pihooks_MANUFACTURER",
+                "persist.sys.pihooks_MODEL",
+                "persist.sys.pihooks_PRODUCT",
+                "persist.sys.pihooks_SECURITY_PATCH",
+                "persist.sys.pihooks_DEVICE_INITIAL_SDK_INT",
+                "persist.sys.pihooks_TYPE",
+                "persist.sys.pihooks_TAG",
+                "persist.sys.pihooks_RELEASE",
+                "persist.sys.pihooks_DEBUG"
+            };
+            for (String key : keys) {
+                String value = SystemProperties.get(key, null);
+                if (value != null) {
+                    String buildKey = key.replace("persist.sys.pihooks_", "");
+                    jsonObject.put(buildKey, value);
+                }
+            }
+            properties.append(jsonObject.toString(4));
+        } catch (JSONException e) {
+            Log.e(TAG, "Error creating JSON from properties", e);
+            properties.append(getString(R.string.error_loading_properties));
+        }
+        new AlertDialog.Builder(getContext())
+            .setTitle(R.string.show_pif_properties_title)
+            .setMessage(properties.toString())
+            .setPositiveButton(android.R.string.ok, null)
+            .show();
+    }
+
+    private void loadPifJson(Uri uri) {
+        Log.d(TAG, "Loading PIF JSON from URI: " + uri.toString());
+        try (InputStream inputStream = getActivity().getContentResolver().openInputStream(uri)) {
+            if (inputStream != null) {
+                String json = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+                Log.d(TAG, "PIF JSON data: " + json);
+                JSONObject jsonObject = new JSONObject(json);
+                for (Iterator<String> it = jsonObject.keys(); it.hasNext(); ) {
+                    String key = it.next();
+                    String value = jsonObject.getString(key);
+                    Log.d(TAG, "Setting PIF property: persist.sys.pihooks_" + key + " = " + value);
+                    SystemProperties.set("persist.sys.pihooks_" + key, value);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error reading PIF JSON or setting properties", e);
+        }
+        mHandler.postDelayed(() -> {
+            SystemRestartUtils.showSystemRestartDialog(getContext());
+        }, 1250);
+    }
+
+    private void loadGameSpoofingJson(Uri uri) {
+        Log.d(TAG, "Loading Game Props JSON from URI: " + uri.toString());
+        try (InputStream inputStream = getActivity().getContentResolver().openInputStream(uri)) {
+            if (inputStream != null) {
+                String json = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+                Log.d(TAG, "Game Props JSON data: " + json);
+                JSONObject jsonObject = new JSONObject(json);
+                for (Iterator<String> it = jsonObject.keys(); it.hasNext(); ) {
+                    String key = it.next();
+                    if (key.startsWith("PACKAGES_") && !key.endsWith("_DEVICE")) {
+                        String deviceKey = key + "_DEVICE";
+                        if (jsonObject.has(deviceKey)) {
+                            JSONObject deviceProps = jsonObject.getJSONObject(deviceKey);
+                            JSONArray packages = jsonObject.getJSONArray(key);
+                            for (int i = 0; i < packages.length(); i++) {
+                                String packageName = packages.getString(i);
+                                Log.d(TAG, "Spoofing package: " + packageName);
+                                setGameProps(packageName, deviceProps);
+                            }
+                        }            
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error reading Game Props JSON or setting properties", e);
+        }
+        mHandler.postDelayed(() -> {
+            SystemRestartUtils.showSystemRestartDialog(getContext());
+        }, 1250);
+    }
+
+    private void setGameProps(String packageName, JSONObject deviceProps) {
+        try {
+            for (Iterator<String> it = deviceProps.keys(); it.hasNext(); ) {
+                String key = it.next();
+                String value = deviceProps.getString(key);
+                String systemPropertyKey = "persist.sys.gameprops." + packageName + "." + key;
+                SystemProperties.set(systemPropertyKey, value);
+                Log.d(TAG, "Set system property: " + systemPropertyKey + " = " + value);
+            }
+        } catch (JSONException e) {
+            Log.e(TAG, "Error parsing device properties", e);
+        }
+    }
+
+    @Override
     public boolean onPreferenceChange(Preference preference, Object newValue) {
         if (preference == mThreeFingersSwipeAction) {
             handleListChange((ListPreference) preference, newValue,
                     LineageSettings.System.KEY_THREE_FINGERS_SWIPE_ACTION);
+            return true;
+        }else if (preference == mGamePropsSpoof) {
+                    SystemRestartUtils.showSystemRestartDialog(getContext());
             return true;
         }
         return false;

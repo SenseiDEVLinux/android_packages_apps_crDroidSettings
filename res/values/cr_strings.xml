@@ -1456,4 +1456,21 @@
     <string name="custom_style_fluid">Fluid (Transparent)</string>
     <string name="custom_style_ios">IOS</string>
     <string name="custom_style_layers">Layers</string>
+	
+	<!-- GameProps spoofing -->
+    <string name="gameprops_title">Enable GameProps spoofing</string>
+    <string name="gameprops_summary">Enables all the spoof options within the PixelProps</string>
+    <string name="gameprops_load_json_title">Select GameProps JSON File</string>
+    <string name="gameprops_load_json_summary">Pick GameProps JSON file to be used for spoofing games</string>
+	
+	<!-- Keybox Data -->
+    <string name="keybox_data_title">Select keybox XML to spoof</string>
+    <string name="keybox_data_summary">Select keybox XML used for key attestation spoofing for all apps system wide. Click the delete button in order to reset the keybox data values used by the system.</string>
+	
+	<!-- PIF spoofing -->
+    <string name="pif_spoofing_title">Select PIF JSON File</string>
+    <string name="pif_spoofing_summary">Pick PIF JSON file to be used for spoofing play integrity</string>
+	<string name="show_pif_properties_title">Play Integrity Fix properties</string>
+    <string name="show_pif_properties_summary">Show all currently set PIF properties</string>
+    <string name="error_loading_properties">Error loading PIF properties</string>
 </resources>
